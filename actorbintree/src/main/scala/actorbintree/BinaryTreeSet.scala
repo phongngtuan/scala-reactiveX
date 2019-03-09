@@ -66,14 +66,18 @@ class BinaryTreeSet extends Actor {
 
   // optional
   /** Accepts `Operation` and `GC` messages. */
-  val normal: Receive = { case _ => ??? }
+  val normal: Receive = {
+    case cmd => root ! cmd
+  }
 
   // optional
   /** Handles messages while garbage collection is performed.
     * `newRoot` is the root of the new binary tree where we want to copy
     * all non-removed elements into.
     */
-  def garbageCollecting(newRoot: ActorRef): Receive = ???
+  def garbageCollecting(newRoot: ActorRef): Receive = {
+
+  }
 
 }
 
@@ -101,7 +105,61 @@ class BinaryTreeNode(val elem: Int, initiallyRemoved: Boolean) extends Actor {
 
   // optional
   /** Handles `Operation` messages and `CopyTo` requests. */
-  val normal: Receive = { case _ => ??? }
+  val normal: Receive = {
+    case req @ Contains(requester, id, requestedElem) =>
+      if (requestedElem == elem) requester ! ContainsResult(id, !removed)
+      else if (requestedElem < elem) {
+        subtrees.get(Left) match {
+          case Some(child) => child ! req
+          case None => requester ! ContainsResult(id, false)
+        }
+      } else {
+        subtrees.get(Right) match {
+          case Some(child) => child ! Contains(requester, id, requestedElem)
+          case None => requester ! ContainsResult(id, false)
+        }
+      }
+    case req @ Insert(requester, id, requestedElem) =>
+      if (requestedElem == elem) {
+        removed = false
+        requester ! OperationFinished(id)
+      }
+      else if (requestedElem < elem) {
+        subtrees.get(Left) match {
+          case Some(child) => child ! req
+          case None =>
+            val child = context.actorOf(BinaryTreeNode.props(requestedElem, false))
+            subtrees = subtrees + (Left -> child)
+            requester ! OperationFinished(id)
+        }
+      } else {
+        subtrees.get(Right) match {
+          case Some(child) => child ! req
+          case None =>
+            val child = context.actorOf(BinaryTreeNode.props(requestedElem, false))
+            subtrees = subtrees + (Right -> child)
+            requester ! OperationFinished(id)
+        }
+      }
+    case req @ Remove(requester, id, requestedElem) =>
+      if (requestedElem == elem) {
+        removed = true
+        requester ! OperationFinished(id)
+      } else if (requestedElem < elem) {
+        subtrees.get(Left) match {
+          case Some(child) => child ! req
+          case None => OperationFinished(id)
+        }
+      } else {
+        subtrees.get(Right) match {
+          case Some(child) => child ! req
+          case None => OperationFinished(id)
+        }
+      }
+    case CopyTo(treeNode) =>
+      if (!removed) treeNode ! Insert(context.self, 0, elem)
+      subtrees.values.foreach(_ ! CopyTo(treeNode))
+  }
 
   // optional
   /** `expected` is the set of ActorRefs whose replies we are waiting for,
